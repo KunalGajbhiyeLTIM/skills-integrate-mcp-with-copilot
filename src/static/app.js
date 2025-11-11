@@ -3,6 +3,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const signupContainer = document.getElementById("signup-container");
+  const loginForm = document.getElementById("login-form");
+  const logoutBtn = document.getElementById("logout-btn");
+
+  let isTeacher = false;
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -27,12 +32,14 @@ document.addEventListener("DOMContentLoaded", () => {
             ? `<div class="participants-section">
               <h5>Participants:</h5>
               <ul class="participants-list">
-                ${details.participants
-                  .map(
-                    (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
-                  )
-                  .join("")}
+                        ${details.participants
+                          .map((email) => {
+                            if (isTeacher) {
+                              return `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`;
+                            }
+                            return `<li><span class="participant-email">${email}</span></li>`;
+                          })
+                          .join("")}
               </ul>
             </div>`
             : `<p><em>No participants yet</em></p>`;
@@ -56,7 +63,7 @@ document.addEventListener("DOMContentLoaded", () => {
         activitySelect.appendChild(option);
       });
 
-      // Add event listeners to delete buttons
+      // Add event listeners to delete buttons (only present when teacher)
       document.querySelectorAll(".delete-btn").forEach((button) => {
         button.addEventListener("click", handleUnregister);
       });
@@ -155,6 +162,64 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Check auth status (teacher login) and adjust UI
+  async function checkAuth() {
+    try {
+      const resp = await fetch('/auth/status');
+      const data = await resp.json();
+      isTeacher = !!data.is_teacher;
+      if (!isTeacher) {
+        // hide signup form if not a teacher
+        if (signupContainer) signupContainer.classList.add('hidden');
+        logoutBtn.classList.add('hidden');
+      } else {
+        if (signupContainer) signupContainer.classList.remove('hidden');
+        logoutBtn.classList.remove('hidden');
+      }
+    } catch (e) {
+      console.error('auth check failed', e);
+    }
+  }
+
+  // Handle login form
+  if (loginForm) {
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value;
+      const password = document.getElementById('login-password').value;
+      try {
+        const resp = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+        });
+        if (resp.ok) {
+          await checkAuth();
+          fetchActivities();
+        } else {
+          const err = await resp.json();
+          messageDiv.textContent = err.detail || 'Login failed';
+          messageDiv.className = 'error';
+          messageDiv.classList.remove('hidden');
+        }
+      } catch (err) {
+        console.error('login error', err);
+      }
+    });
+  }
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+      try {
+        await fetch('/logout', { method: 'POST' });
+        await checkAuth();
+        fetchActivities();
+      } catch (e) {
+        console.error('logout failed', e);
+      }
+    });
+  }
+
   // Initialize app
-  fetchActivities();
+  checkAuth().then(() => fetchActivities());
 });
