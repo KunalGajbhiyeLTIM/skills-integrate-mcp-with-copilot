@@ -5,7 +5,7 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
@@ -18,6 +18,28 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+# Load teacher credentials from data/teachers.json (simple JSON file)
+import json
+
+data_dir = current_dir / ".." / "data"
+data_dir = data_dir.resolve()
+teachers_file = data_dir / "teachers.json"
+
+if not data_dir.exists():
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # best effort; if running in an environment without write access we'll continue
+        pass
+
+teachers = []
+try:
+    if teachers_file.exists():
+        with open(teachers_file, "r", encoding="utf-8") as f:
+            teachers = json.load(f).get("teachers", [])
+except Exception:
+    teachers = []
 
 # In-memory activity database
 activities = {
@@ -89,8 +111,12 @@ def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(request: Request, activity_name: str, email: str):
     """Sign up a student for an activity"""
+    # Only a logged-in teacher may sign up students
+    teacher_user = request.cookies.get("teacher_user")
+    if not teacher_user or not any(t.get("username") == teacher_user for t in teachers):
+        raise HTTPException(status_code=401, detail="Teacher login required to sign up students")
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -111,8 +137,12 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(request: Request, activity_name: str, email: str):
     """Unregister a student from an activity"""
+    # Only a logged-in teacher may unregister students
+    teacher_user = request.cookies.get("teacher_user")
+    if not teacher_user or not any(t.get("username") == teacher_user for t in teachers):
+        raise HTTPException(status_code=401, detail="Teacher login required to unregister students")
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -130,3 +160,29 @@ def unregister_from_activity(activity_name: str, email: str):
     # Remove student
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+
+@app.post("/login")
+def login(response: Response, username: str = Form(...), password: str = Form(...)):
+    """Very small / insecure login: checks `data/teachers.json` for username/password and sets a cookie.
+
+    This is intentionally simple for the exercise. For production, use secure session management.
+    """
+    if any(t.get("username") == username and t.get("password") == password for t in teachers):
+        # Set a simple cookie to indicate teacher is logged in
+        response.set_cookie(key="teacher_user", value=username, httponly=True, path="/")
+        return {"message": "ok", "username": username}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.post("/logout")
+def logout(response: Response):
+    response.delete_cookie("teacher_user", path="/")
+    return {"message": "logged out"}
+
+
+@app.get("/auth/status")
+def auth_status(request: Request):
+    teacher_user = request.cookies.get("teacher_user")
+    is_teacher = bool(teacher_user and any(t.get("username") == teacher_user for t in teachers))
+    return {"is_teacher": is_teacher}
